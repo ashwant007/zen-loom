@@ -8,13 +8,12 @@
     "start": "next start"
   },
   "dependencies": {
-    "next": "14.2.5",
+    "next": "14.2.32",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "@supabase/supabase-js": "2.45.0",
     "@google/generative-ai": "0.17.1",
     "jspdf": "2.5.1",
-    "jspdf-autotable": "3.8.2",
-    "composio-core": "0.4.6"
+    "jspdf-autotable": "3.8.2"
   }
 }
