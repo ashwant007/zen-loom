@@ -4,7 +4,7 @@ import { buildBrainPrompt } from "../../../lib/brainPrompt";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
-const MODELS = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-pro"];
+const MODELS = ["gemini-flash-latest", "gemini-3.5-flash", "gemini-3.8-flash", "gemini-2.5-flash"];
 
 // Parse typed text like "FA 1476 for body" without needing Gemini.
 function parseTyped(text, card) {
