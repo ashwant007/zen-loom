@@ -4,21 +4,31 @@ import { buildBrainPrompt } from "../../../lib/brainPrompt";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
-const MODELS = ["gemini-flash-latest", "gemini-3.5-flash", "gemini-3.8-flash", "gemini-2.5-flash"];
+const MODELS = ["gemini-3.8-flash", "gemini-flash-latest", "gemini-3.5-flash"];
 
-// Parse typed text like "FA 1476 for body" without needing Gemini.
+// Parse typed text like "FA 1476 for body" — accepts ANY column name.
 function parseTyped(text, card) {
   const colours = loadColours();
   const low = text.toLowerCase().trim();
-  const cols = ["Body","Warp","Weft","Warp2","Butta","Zari","Zari2"];
   if (/next row/.test(low)) return { intent: "new_row", transcript: text };
   if (/^save|save it|save this|finish/.test(low)) return { intent: "save", transcript: text };
+
   const loom = low.match(/loom\s*(\w+)/);
   const code = text.match(/FA\s*\d{3,4}/i);
+
+  // column = the word after "for", else the last word that isn't the code
   let col = null;
-  cols.forEach(c => { if (low.includes(c.toLowerCase()) || low.includes(c.toLowerCase().replace("2"," 2"))) col = c; });
+  const forMatch = text.match(/for\s+([A-Za-z][A-Za-z0-9 ]*)$/i);
+  if (forMatch) col = forMatch[1].trim();
+  if (!col) {
+    const words = text.replace(/FA\s*\d{3,4}/i, "").trim().split(/\s+/).filter(Boolean);
+    if (words.length) col = words[words.length - 1];
+  }
+  if (col) col = col.charAt(0).toUpperCase() + col.slice(1);
+
   const out = { intent: "fill", transcript: text, columns: card.columns || [], rows: card.rows || [] };
   if (loom) { out.intent = "set_meta"; out.loom_no = loom[1]; }
+
   if (code && col) {
     const norm = code[0].toUpperCase().replace(/^FA\s*/, "FA ");
     if (!out.columns.includes(col)) out.columns = [...out.columns, col];
