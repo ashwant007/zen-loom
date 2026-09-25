@@ -1,5 +1,6 @@
 // THE HANDS (backend, keys hidden). On "save": build a PDF that looks like the
-// paper loom card (plain bordered grid, codes only), then file it into Google Drive.
+// paper loom card (plain bordered grid, codes only), then file it into Google Drive
+// directly, using a Google OAuth refresh token stored in Vercel settings.
 
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -19,14 +20,13 @@ function buildPdf(card) {
   doc.text(`Date: ${date}`, 440, 60);
 
   const cols = card.columns || [];
-  const head = [cols];
   const bodyRows = (card.rows || []).map((r) =>
     cols.map((c) => (r[c] && r[c].code ? r[c].code : ""))
   );
 
   autoTable(doc, {
     startY: 80,
-    head,
+    head: [cols],
     body: bodyRows,
     theme: "grid",
     styles: { lineColor: [0, 0, 0], lineWidth: 0.7, textColor: [0, 0, 0], fontSize: 11, cellPadding: 6 },
@@ -36,28 +36,66 @@ function buildPdf(card) {
   return Buffer.from(doc.output("arraybuffer"));
 }
 
-async function uploadToDrive(pdfBuffer, filename) {
-  // Uses Composio to place the file in the connected Google Drive folder.
-  // Keys + folder id come from Vercel settings.
-  const apiKey = process.env.COMPOSIO_API_KEY;
-  const folderId = process.env.DRIVE_FOLDER_ID;
-  if (!apiKey) throw new Error("Missing Composio key.");
-
-  const { Composio } = await import("composio-core");
-  const composio = new Composio({ apiKey });
-
-  // Google Drive upload via Composio's action. The connected account was set up
-  // once in the Composio dashboard, so no per-use login is needed.
-  const res = await composio.actions.execute({
-    actionName: "GOOGLEDRIVE_UPLOAD_FILE",
-    params: {
-      file_name: filename,
-      file_content_base64: pdfBuffer.toString("base64"),
-      parent_id: folderId || undefined,
-      mime_type: "application/pdf",
-    },
+async function googleAccessToken() {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+  if (!clientId || !clientSecret || !refreshToken) {
+    throw new Error("Missing Google Drive credentials in server settings.");
+  }
+  const resp = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: "refresh_token",
+    }),
   });
-  return res;
+  if (!resp.ok) throw new Error("Could not refresh Google token.");
+  const data = await resp.json();
+  return data.access_token;
+}
+
+async function uploadToDrive(pdfBuffer, filename) {
+  const folderId = process.env.DRIVE_FOLDER_ID;
+  const token = await googleAccessToken();
+
+  const metadata = { name: filename, mimeType: "application/pdf" };
+  if (folderId) metadata.parents = [folderId];
+
+  const boundary = "zen_boundary_" + Date.now();
+  const pre =
+    `--${boundary}\r\n` +
+    "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
+    JSON.stringify(metadata) +
+    `\r\n--${boundary}\r\n` +
+    "Content-Type: application/pdf\r\n" +
+    "Content-Transfer-Encoding: base64\r\n\r\n";
+  const post = `\r\n--${boundary}--`;
+  const body = Buffer.concat([
+    Buffer.from(pre, "utf8"),
+    Buffer.from(pdfBuffer.toString("base64"), "utf8"),
+    Buffer.from(post, "utf8"),
+  ]);
+
+  const resp = await fetch(
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": `multipart/related; boundary=${boundary}`,
+      },
+      body,
+    }
+  );
+  if (!resp.ok) {
+    const t = await resp.text().catch(() => "");
+    throw new Error("Drive upload failed: " + t.slice(0, 160));
+  }
+  return await resp.json();
 }
 
 export async function POST(req) {
@@ -69,11 +107,11 @@ export async function POST(req) {
     const date = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
     const filename = `Loom ${card.loom_no || "-"} - ${card.weaver || "-"} - ${card.design_code || "card"} - ${date}.pdf`;
 
-    let drive = null, driveError = null;
+    let driveError = null;
     try {
-      drive = await uploadToDrive(pdf, filename);
+      await uploadToDrive(pdf, filename);
     } catch (e) {
-      driveError = e.message; // If Drive fails, we still tell the tablet (offline-safe handling on client).
+      driveError = e.message;
     }
 
     return Response.json({ ok: !driveError, filename, driveError });
